@@ -1,1 +1,1 @@
-"""Reusable modules for the Food Delivery project (data, KPIs, charts, forecast, stats)."""
+"""Reusable modules for the Food Delivery project (data, KPIs, charts)."""

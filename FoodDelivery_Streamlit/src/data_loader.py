@@ -17,6 +17,7 @@ def load_tables():
 
     # the date column is read as text, so convert it to a real date
     tables["orders"]["Order_Date"] = pd.to_datetime(tables["orders"]["Order_Date"])
+    tables["daily_kpi"]["KPI_Date"] = pd.to_datetime(tables["daily_kpi"]["KPI_Date"])
     return tables
 
 
@@ -54,3 +55,29 @@ def filter_partners(partners, regions, vehicles):
     partners = partners[partners["Region"].isin(regions)]
     partners = partners[partners["Vehicle_Type"].isin(vehicles)]
     return partners
+
+
+def build_daily_kpi(tables):
+    """
+    Daily KPI table for the "Daily KPI lookup" tab.
+    Main source = daily_kpi_summary.csv (the SQL table). If the export is missing some dates
+    (for example MySQL Workbench exports only 1000 rows by default), those dates are
+    calculated from the orders table with the same logic as the SQL, so every day is available.
+    """
+    daily = tables["daily_kpi"][["KPI_Date", "Total_Orders", "Delivered_Orders",
+                                 "Cancelled_Orders", "Returned_Orders", "Delivered_Revenue"]]
+
+    orders = tables["orders"]
+    status = orders["Order_Status"]
+    from_orders = pd.DataFrame({
+        "KPI_Date": orders["Order_Date"],
+        "Total_Orders": 1,
+        "Delivered_Orders": (status == "Delivered").astype(int),
+        "Cancelled_Orders": (status == "Cancelled").astype(int),
+        "Returned_Orders": (status == "Returned").astype(int),
+        "Delivered_Revenue": orders["Final_Amount"].where(status == "Delivered", 0),
+    }).groupby("KPI_Date", as_index=False).sum()
+
+    missing = from_orders[~from_orders["KPI_Date"].isin(daily["KPI_Date"])]
+    full = pd.concat([daily, missing], ignore_index=True).sort_values("KPI_Date")
+    return full.reset_index(drop=True)

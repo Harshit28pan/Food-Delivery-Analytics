@@ -1,5 +1,5 @@
 """
-app.py  -  Food Delivery Operations & Forecast Dashboard
+app.py  -  Food Delivery Operations Dashboard
 
 Run with:   streamlit run app.py
 
@@ -10,7 +10,7 @@ import pandas as pd
 import streamlit as st
 
 import config
-from src import charts, data_loader, forecasting, kpis, stats_tests
+from src import charts, data_loader, kpis
 
 # ---------------------------------------------------------------- page setup
 st.set_page_config(page_title="Food Delivery Dashboard", layout="wide")
@@ -36,7 +36,6 @@ if not years or not regions or not vehicles:
 
 # apply the filters: df = selected orders, partners_f / restaurants_f = selected partners / restaurants
 df = data_loader.apply_filters(merged, years, regions, vehicles)
-df_all_years = data_loader.apply_filters(merged, all_years, regions, vehicles)
 partners_f = data_loader.filter_partners(partners, regions, vehicles)
 restaurants_f = restaurants[restaurants["City"].isin(regions)]
 
@@ -44,12 +43,11 @@ if df.empty or partners_f.empty:
     st.warning("No data for this combination of filters.")
     st.stop()
 
-st.title("Food Delivery: Operations & Forecast")
+st.title("Streamlit Dashboard")
 st.caption(f"{len(df):,} orders selected")
 
 # ---------------------------------------------------------------- tabs
-tab1, tab2, tab3, tab4, tab5 = st.tabs(
-    ["Overview", "Delivery partners", "Restaurants", "2026 Forecast", "Statistics"])
+tab1, tab2, tab3, tab4 = st.tabs(["Overview", "Delivery partners", "Restaurants", "Daily KPI lookup"])
 
 # ================================================================ TAB 1: OVERVIEW
 with tab1:
@@ -143,85 +141,34 @@ with tab3:
                "Avg_Preparation_Time_Minutes", "Avg_Rating", "Orders"]
     st.dataframe(rest_df[columns].head(15), hide_index=True)
 
-# ================================================================ TAB 4: FORECAST
+# ================================================================ TAB 4: DAILY KPI LOOKUP
+# Same idea as the "Daily KPI lookup" page of the Power BI report.
+# Source: daily_kpi_summary (SQL). It is one row per day, so the sidebar filters do not apply here.
 with tab4:
-    daily = forecasting.daily_revenue(df_all_years)
-    monthly_fc, model, quality = forecasting.forecast_year(daily)
-    actual = forecasting.actual_monthly_by_year(df_all_years)
+    daily = data_loader.build_daily_kpi(tables)
 
-    total_forecast = monthly_fc["Predicted_Revenue"].sum()
-    last_year = actual.columns.max()
-    last_year_total = actual[last_year].sum()
-    peak = monthly_fc.loc[monthly_fc["Predicted_Revenue"].idxmax()]
-    slowest = monthly_fc.loc[monthly_fc["Predicted_Revenue"].idxmin()]
+    st.caption("Pick a date to see the KPIs of that day. Sidebar filters do not apply to this tab.")
+    picked = st.date_input("Date", value=daily["KPI_Date"].max().date(),
+                           min_value=daily["KPI_Date"].min().date(),
+                           max_value=daily["KPI_Date"].max().date())
 
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("2026 forecast revenue", kpis.format_money(total_forecast))
-    c1.caption(f"{(total_forecast / last_year_total - 1) * 100:+.1f}% compared with {last_year}")
-    c2.metric("Peak month", peak["Month_Name"])
-    c2.caption(kpis.format_money(peak["Predicted_Revenue"]))
-    c3.metric("Slowest month", slowest["Month_Name"])
-    c3.caption(kpis.format_money(slowest["Predicted_Revenue"]))
-    c4.metric("Model R² on 2025 (test)", f"{quality['test_r2']:.3f}")
-    c4.caption(f"Average daily error ₹{quality['test_mae']:,.0f}")
+    d = kpis.daily_kpis(daily, picked)
+    if d is None:
+        st.warning("No orders on this date.")
+    else:
+        c1, c2, c3, c4, c5 = st.columns(5)
+        c1.metric("Orders", f"{d['orders']:,}")
+        c2.metric("Delivered", f"{d['delivered']:,}")
+        c3.metric("Cancelled", f"{d['cancelled']:,}")
+        c4.metric("Returned", f"{d['returned']:,}")
+        c5.metric("Revenue", kpis.format_money(d["revenue"]))
 
-    st.pyplot(charts.forecast(monthly_fc, actual))
-    st.info("The model uses only the month of the year (same method as the regression step). It repeats the seasonal pattern "
-            "and does not assume any growth. Prepare stock and partners before October.")
-
-    # model check: same numbers as the regression step (Model 2). Train = 2023-2024, test = 2025
-    with st.expander("Model check (same as the regression step, Model 2)"):
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("R² (train 2023-24)", f"{quality['train_r2']:.3f}")
-        m2.metric("R² (test 2025)", f"{quality['test_r2']:.3f}")
-        m3.metric("MAE (test 2025)", f"₹{quality['test_mae']:,.2f}")
-        m4.metric("RMSE (test 2025)", f"₹{quality['test_rmse']:,.2f}")
-        st.caption("These numbers match the regression output when all years, regions and vehicles are selected.")
-
-    left, right = st.columns([3, 2])
-    left.pyplot(charts.month_impact(forecasting.month_impact(model)))
-    table = monthly_fc[["Month_Name", "Predicted_Revenue"]].round(0)
-    right.dataframe(table, hide_index=True)
-    right.download_button("Download forecast as CSV", table.to_csv(index=False), "forecast_2026.csv")
-
-# ================================================================ TAB 5: STATISTICS
-with tab5:
-    st.caption("Same 5 tests, samples and random_state (42) as the statistics step, so the numbers match its output. "
-               "They always use all orders (the sidebar filters do not change them). "
-               "Significance level = 0.05: if the p-value is below 0.05 we reject the null hypothesis (H0).")
-
-    # benchmark for tests 1 and 3 (the statistics step used 35 minutes)
-    benchmark = st.number_input("Benchmark delivery time for the one-sample tests (minutes)", value=35)
-
-    results = [
-        ("1. One-sample Z-test", "Delivery time vs benchmark", stats_tests.one_sample_z_test(merged, benchmark)),
-        ("2. Two-sample Z-test", "Delivery time: Metropolitan vs Semi-Urban", stats_tests.two_sample_z_test(merged)),
-        ("3. One-sample T-test", "Delivery time vs benchmark (small sample)", stats_tests.one_sample_t_test(merged, benchmark)),
-        ("4. Two-sample T-test", "Final amount: festive vs normal", stats_tests.two_sample_t_test(merged)),
-        ("5. Paired T-test", "Monthly delivered revenue: 2024 vs 2025", stats_tests.paired_t_test(merged)),
-    ]
-
-    # summary table of all five tests
-    summary = pd.DataFrame({
-        "Test": [r[0] for r in results],
-        "Question": [r[1] for r in results],
-        "Test statistic": [round(r[2]["statistic"], 4) for r in results],
-        "P-value": [f"{r[2]['p_value']:.4g}" for r in results],
-        "Decision": [r[2]["decision"] for r in results],
-    })
-    st.dataframe(summary, hide_index=True)
-
-    # one block per test: hypotheses, numbers, observation
-    for title, question, r in results:
-        st.subheader(title)
-        st.write("**H0 (null):** " + r["h0"])
-        st.write("**H1 (alternative):** " + r["h1"])
         c1, c2, c3 = st.columns(3)
-        c1.metric("Test statistic", f"{r['statistic']:.4f}")
-        c2.metric("P-value", f"{r['p_value']:.4g}")
-        c3.metric("Decision", r["decision"])
-        if r["rejected"]:
-            st.success("Observation: " + r["observation"])
-        else:
-            st.info("Observation: " + r["observation"])
-        st.caption(r["note"])
+        c1.metric("Delivered rate", f"{d['delivered_rate']:.1f}%")
+        c2.metric("Cancel rate", f"{d['cancel_rate']:.1f}%")
+        c3.metric("Orders vs average day", f"{d['vs_avg_day']:+.1f}%")
+        c3.caption(f"Overall average day = {d['avg_overall']:.0f} orders")
+
+        left, right = st.columns(2)
+        left.pyplot(charts.daily_monthly_orders(kpis.daily_monthly_trend(daily), pd.Timestamp(picked)))
+        right.pyplot(charts.daily_orders(kpis.daily_month_table(daily, picked), pd.Timestamp(picked), d["avg_day"]))

@@ -88,7 +88,7 @@ WHERE 1 = 0;
 -- Create a log table to record every newly inserted order.
 CREATE TABLE IF NOT EXISTS order_audit_log (
     Log_ID INT AUTO_INCREMENT PRIMARY KEY,
-    Order_Key INT,
+    Order_Key BIGINT,
     Action_Type VARCHAR(20),
     Details VARCHAR(150),
     Action_Time DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -177,6 +177,7 @@ DROP PROCEDURE IF EXISTS sp_refresh_daily_kpi //
 CREATE PROCEDURE sp_refresh_daily_kpi()
 BEGIN
     -- Insert the previous day's order counts and delivered revenue.
+    -- HAVING COUNT(*) > 0 stops an empty row when there are no orders for that day.
     INSERT INTO daily_kpi_summary
         (KPI_Date, Total_Orders, Delivered_Orders,
          Cancelled_Orders, Returned_Orders, Delivered_Revenue)
@@ -191,6 +192,7 @@ BEGIN
         ), 0)
     FROM orders
     WHERE Order_Date = CURDATE() - INTERVAL 1 DAY
+    HAVING COUNT(*) > 0
     ON DUPLICATE KEY UPDATE
         Total_Orders = VALUES(Total_Orders),
         Delivered_Orders = VALUES(Delivered_Orders),
@@ -198,7 +200,7 @@ BEGIN
         Returned_Orders = VALUES(Returned_Orders),
         Delivered_Revenue = VALUES(Delivered_Revenue);
 END //
-DELIMITER ;
+DELIMITER;
 
 -- Create one procedure to run the daily backup and KPI refresh together.
 
@@ -426,7 +428,7 @@ LEFT JOIN delivery_partners d
     ON o.Delivery_Partner_ID = d.Delivery_Partner_ID
 WHERE d.Delivery_Partner_ID IS NULL;
 
-- Check that the important columns of orders have no NULL values (all values should be zero).
+-- Check that the important columns of orders have no NULL values (all values should be zero).
 SELECT SUM(Order_Key IS NULL) AS Null_Order_Key,
        SUM(Order_Date IS NULL) AS Null_Order_Date,
        SUM(Customer_ID IS NULL) AS Null_Customer_ID,
@@ -479,3 +481,5 @@ SELECT COUNT(*) AS KPI_Days
 FROM daily_kpi_summary;
 
 
+
+SELECT * FROM daily_kpi_summary ORDER BY KPI_Date;

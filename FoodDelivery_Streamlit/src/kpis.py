@@ -92,6 +92,45 @@ def prep_time_by_cuisine_region(restaurants_f):
     return table.reset_index().rename(columns={"City": "Region"})
 
 
+def daily_kpis(daily, date):
+    """Numbers of one chosen day. Returns None if there were no orders on that date."""
+    row = daily[daily["KPI_Date"] == pd.Timestamp(date)]
+    if row.empty:
+        return None
+    row = row.iloc[0]
+    total = row["Total_Orders"]
+    month_df = daily_month_table(daily, date)
+    avg_day = month_df["Total_Orders"].mean()              # average orders per day of this month (chart line)
+    avg_overall = daily["Total_Orders"].mean()             # average orders per day of all days (same as Power BI)
+
+    kpi = {}
+    kpi["orders"] = int(total)
+    kpi["delivered"] = int(row["Delivered_Orders"])
+    kpi["cancelled"] = int(row["Cancelled_Orders"])
+    kpi["returned"] = int(row["Returned_Orders"])
+    kpi["revenue"] = row["Delivered_Revenue"]
+    kpi["delivered_rate"] = row["Delivered_Orders"] / total * 100
+    kpi["cancel_rate"] = row["Cancelled_Orders"] / total * 100
+    kpi["vs_avg_day"] = (total / avg_overall - 1) * 100    # % above / below the overall average day
+    kpi["avg_overall"] = avg_overall
+    kpi["avg_day"] = avg_day
+    return kpi
+
+
+def daily_month_table(daily, date):
+    """All days of the month of the chosen date."""
+    date = pd.Timestamp(date)
+    in_month = (daily["KPI_Date"].dt.year == date.year) & (daily["KPI_Date"].dt.month == date.month)
+    return daily[in_month]
+
+
+def daily_monthly_trend(daily):
+    """Total orders of every month (Jan 2023 to Dec 2025), same as the Power BI 'Monthly Orders' chart."""
+    table = daily.groupby(daily["KPI_Date"].dt.to_period("M"))["Total_Orders"].sum()
+    table.index = table.index.to_timestamp()
+    return table.reset_index()
+
+
 def format_money(value):
     """Write a rupee amount in short form, for example 52.06M or 640.5K."""
     if value >= 1_000_000:

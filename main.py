@@ -1,34 +1,41 @@
 # -*- coding: utf-8 -*-
 """
 Single main file of the whole project: Food Delivery Demand Analysis
-Data cleaning -> SQL (MySQL Workbench) -> MySQL to Python -> EDA -> Statistics -> Regression and forecast
+Data cleaning -> SQL scripts -> MySQL to Python -> EDA -> Statistics -> Regression (4 simple + 2 multiple linear models)
 """
 
 
+import os
 import matplotlib
 
 SHOW_CHARTS = False         # False = only save the charts, do not open them (faster for a full run)
 if not SHOW_CHARTS:
-    matplotlib.use("Agg")       # must be set before the day modules are imported
+    matplotlib.use("Agg")       # must be set before modules are imported
 
 import Data_Cleaning as cleaning
 import Mysql_to_Python as mysql_py
 import EDA as eda
 import Statistics as st
 import Regression as reg
+from sklearn.model_selection import train_test_split
+import importlib
+
+# If the program is run again in the same Spyder / Jupyter console, Python keeps the OLD version
+# of the modules in memory. reload() makes sure the latest saved version of every file is used.
+for module in [cleaning, mysql_py, eda, st, reg]:
+    importlib.reload(module)
 
 
-# ---------------------------------------------------------------- shared helpers
-engine = None           # MySQL connection (the password is asked only once)
-shared = {}             # the Excel data is loaded only once and reused by EDA, Statistics and Regression
+#  shared helpers
+shared = {}             # the MySQL connection and the Excel data are kept here, so they are made only once
 
 
 def get_engine():
-    global engine
-    if engine is None:
+    # MySQL connection (the password is asked only once)
+    if "engine" not in shared:
         password = input("Enter MySQL password: ")
-        engine = cleaning.connect_to_mysql(password)
-    return engine
+        shared["engine"] = cleaning.connect_to_mysql(password)
+    return shared["engine"]
 
 
 def get_data():
@@ -83,6 +90,7 @@ def run_cleaning():
     # export the cleaned tables to MySQL
     print("========== EXPORT TO MYSQL ==========")
     mysql_engine = get_engine()
+    cleaning.drop_old_tables(mysql_engine)      # removes the old tables of the earlier run, so the program can be run again
     cleaning.send_table_to_mysql(customers, "customers", mysql_engine)
     cleaning.send_table_to_mysql(restaurants, "restaurants", mysql_engine)
     cleaning.send_table_to_mysql(partners, "delivery_partners", mysql_engine)
@@ -94,13 +102,14 @@ def run_cleaning():
     print("data cleaning and export finished")
 
 
-#  2. SQL (run in MySQL Workbench)
-def pause_for_sql():
+#  2. SQL (the 3 scripts are run from Python)
+def run_sql_scripts():
+    # the 3 SQL files of the SQL folder are run one by one (same as running them in MySQL Workbench)
     print("========== SQL ==========")
-    print("This step is done in MySQL Workbench, not in Python.")
-    print("Run the 3 scripts of the SQL folder (Keys.sql, Mysql.sql, Agg_tab.sql)")
-    print("so that the keys, the backup and the agg_ tables exist before step 3 (MySQL to Python).")
-    input("Press Enter when the SQL scripts are finished...")
+    mysql_engine = get_engine()
+    for file_name in ["Keys.sql", "Mysql.sql", "Agg_tab.sql"]:
+        print("Running", file_name)
+        cleaning.run_sql_file(mysql_engine, os.path.join("SQL", file_name))
 
 
 #  3. MYSQL TO PYTHON
@@ -165,6 +174,10 @@ def run_eda():
     print("========== PART II: BIVARIATE ==========")
     eda.bivariate_part1(data, partners)
     eda.bivariate_part2(data)
+    eda.bivariate_scatter(partners)
+
+    print("========== PART III: MULTIVARIATE (only the heatmap here, rest in Power BI) ==========")
+    eda.multivariate_correlation(data)
 
 
 #  5. STATISTICS
@@ -248,94 +261,213 @@ def run_statistics():
         h1="monthly delivered revenue of 2024 is not equal to 2025")
 
 
-#  6. REGRESSION AND FORECAST
+#  6. REGRESSION (2 SIMPLE LINEAR REGRESSION MODELS)
 def run_regression():
-    _, data = get_data()
+    (orders, customers, restaurants, partners), data = get_data()
 
-    # ---------------- DAILY DATA ----------------
-    print("\n===== DAILY DATA =====")
+    # Simple linear regression = 1 independent variable (X) and 1 dependent variable (y)
+    # Steps for each model: target -> feature selection -> train -> evaluate -> predict -> chart
+
+    # ================= MODEL 1: TARGET = DAILY REVENUE (used for the 2026 forecast) =================
+    print("\n===== MODEL 1: DAILY REVENUE =====")
     daily = reg.create_daily_data(data)
     print(daily.head())
 
-    # ---------------- TRAIN TEST SPLIT ----------------
     # train = 2023 and 2024, test = 2025 (we predict a year the model has not seen)
-    train = daily[daily["Order_Year"] < 2025]
-    test = daily[daily["Order_Year"] == 2025]
-    print("\nTrain:", train.shape, " Test:", test.shape)
+    train1 = daily[daily["Order_Year"] < 2025]
+    test1 = daily[daily["Order_Year"] == 2025]
+    print("\nTrain:", train1.shape, " Test:", test1.shape)
 
-    # ---------------- MODEL 1: CORRELATION BASED FEATURES ----------------
-    # H0 (null hypothesis)        : Festival_Flag and Month have no effect on Daily_Revenue (their coefficients are 0)
-    # H1 (alternative hypothesis) : at least one of them has an effect on Daily_Revenue (a coefficient is not 0)
-    print("\n===== MODEL 1 =====")
-    features1 = reg.select_features(train)
-    model1 = reg.train_model(train, features1)
+    # feature selection: only variables known in advance, the highest correlation |r| becomes X
+    print("\nFeature selection (train data)")
+    x1 = reg.select_feature(train1, "Daily_Revenue", reg.DAILY_FEATURES)
+
+    # H0 (null hypothesis)        : X has no effect on Daily_Revenue (slope = 0)
+    # H1 (alternative hypothesis) : X has an effect on Daily_Revenue (slope is not 0)
+    print("\nModel 1 - coefficients")
+    model1 = reg.train_model(train1, x1, "Daily_Revenue")
 
     print("\nModel 1 - train")
-    reg.evaluate_model(model1, train, features1)
-    print("\nModel 1 - test")
-    actual1, predicted1 = reg.evaluate_model(model1, test, features1)
+    reg.evaluate_model(model1, train1, x1, "Daily_Revenue")
+    print("\nModel 1 - test (unseen 2025 data)")
+    reg.evaluate_model(model1, test1, x1, "Daily_Revenue")
 
-    reg.plot_actual_predicted(actual1, predicted1, "Model1_Actual_vs_Predicted.png")
-    reg.plot_residuals(actual1, predicted1, "Model1_Residuals.png")
+    # predict the revenue for a normal day (0) and a festive day (1)
+    print("\nModel 1 - predicted revenue for new values of", x1)
+    reg.predict_values(model1, x1, "Daily_Revenue", [0, 1])
 
-    # ---------------- MODEL 2: MONTH BASED ----------------
-    # H0 (null hypothesis)        : the month of the year has no effect on Daily_Revenue (all 11 month coefficients are 0)
-    # H1 (alternative hypothesis) : at least one month has an effect on Daily_Revenue (a month coefficient is not 0)
-    print("\n===== MODEL 2 =====")
-    # add the 0/1 month columns (Month_2 ... Month_12) to the daily data
-    month_columns = reg.create_month_columns(daily)
-    month_features = month_columns.columns.tolist()
+    reg.plot_regression_line(test1, model1, x1, "Daily_Revenue",
+                             "Model 1: " + x1 + " vs Daily Revenue (2025)", "Model1_Regression_Line.png")
+    reg.plot_residuals(test1, model1, x1, "Daily_Revenue",
+                       "Model 1: Residual Plot", "Model1_Residuals.png")
 
-    daily = daily.join(month_columns)
-    train = daily[daily["Order_Year"] < 2025]
-    test = daily[daily["Order_Year"] == 2025]
+    # ---------------- 2026 FORECAST ----------------
+    # X is known for every day of 2026, so no assumption is needed.
+    # The final model learns from all 3 years, then predicts every day of 2026.
+    print("\nModel 1 - final model on all 3 years (used for the forecast)")
+    final_model = reg.train_model(daily, x1, "Daily_Revenue")
 
-    model2 = reg.train_model(train, month_features)
+    print("\nModel 1 - 2026 forecast")
+    forecast = reg.forecast_2026(final_model, x1, daily)
+    festive_months = sorted(daily[daily["Festival_Flag"] == 1]["Month"].unique())
+    actual_2025 = daily[daily["Order_Year"] == 2025].groupby("Month")["Daily_Revenue"].sum()
+    reg.plot_forecast(forecast, actual_2025, festive_months)
+
+    # ================= MODEL 2: TARGET = AVG CUSTOMER RATING (delivery partners) =================
+    print("\n===== MODEL 2: PARTNER RATING =====")
+    partner_data = reg.create_partner_data(partners)
+
+    # partner data has no dates, so 80% of the partners are used for training and 20% for testing
+    train2, test2 = train_test_split(partner_data, test_size=0.2, random_state=42)
+    print("Train:", train2.shape, " Test:", test2.shape)
+
+    print("\nFeature selection (train data)")
+    x2 = reg.select_feature(train2, "Avg_Customer_Rating", reg.PARTNER_FEATURES)
+
+    # H0 (null hypothesis)        : X has no effect on Avg_Customer_Rating (slope = 0)
+    # H1 (alternative hypothesis) : X has an effect on Avg_Customer_Rating (slope is not 0)
+    print("\nModel 2 - coefficients")
+    model2 = reg.train_model(train2, x2, "Avg_Customer_Rating")
 
     print("\nModel 2 - train")
-    reg.evaluate_model(model2, train, month_features)
-    print("\nModel 2 - test")
-    actual2, predicted2 = reg.evaluate_model(model2, test, month_features)
+    reg.evaluate_model(model2, train2, x2, "Avg_Customer_Rating")
+    print("\nModel 2 - test (unseen 20% partners)")
+    reg.evaluate_model(model2, test2, x2, "Avg_Customer_Rating")
 
-    reg.plot_actual_predicted(actual2, predicted2, "Model2_Actual_vs_Predicted.png")
-    reg.plot_residuals(actual2, predicted2, "Model2_Residuals.png")
+    print("\nModel 2 - predicted rating for new values of", x2)
+    reg.predict_values(model2, x2, "Avg_Customer_Rating", [15, 22, 30])
 
-    # ---------------- FORECAST 2026 ----------------
-    # H0 (null hypothesis)        : daily revenue does not change from month to month, so the 2026 forecast is the same every month
-    # H1 (alternative hypothesis) : daily revenue changes with the month, so the 2026 forecast is different in different months
-    print("\n===== FORECAST 2026 =====")
-    forecast_model, monthly_forecast = reg.forecast_next_year(daily, month_features)
-    reg.plot_forecast(monthly_forecast)
+    reg.plot_regression_line(test2, model2, x2, "Avg_Customer_Rating",
+                             "Model 2: " + x2 + " vs Avg Customer Rating (20% test partners)", "Model2_Regression_Line.png")
+    reg.plot_residuals(test2, model2, x2, "Avg_Customer_Rating",
+                       "Model 2: Residual Plot", "Model2_Residuals.png")
 
-    print("\n===== MONTH IMPACT =====")
-    reg.show_month_impact(forecast_model, month_features)
+
+#  7. REGRESSION: MULTIPLE LINEAR REGRESSION (MODEL 1 AND 2) + 2 MORE SIMPLE MODELS (MODEL 3 AND 4)
+def run_regression_multiple():
+    (orders, customers, restaurants, partners), data = get_data()
+
+    # Multiple linear regression = 2 or more independent variables (X) and 1 dependent variable (y)
+    # The models of step 6 are not changed. Here we try more X variables to see if R2 increases.
+    # We compare the models on the TEST data, because R2 on train data always goes up when X is added.
+
+    # ================= MODEL 1 (MULTIPLE): TARGET = DAILY REVENUE =================
+    print("\n===== MODEL 1 (MULTIPLE): DAILY REVENUE =====")
+    daily = reg.create_daily_data(data)
+    daily = reg.add_order_value_column(daily, data)      # Avg_Order_Value of every day
+    print(daily.head())
+
+    # same split as step 6: train = 2023 and 2024, test = 2025
+    train1 = daily[daily["Order_Year"] < 2025]
+    test1 = daily[daily["Order_Year"] == 2025]
+    print("\nTrain:", train1.shape, " Test:", test1.shape)
+
+    print("\nModel 1 - R2 of all the models")
+    table1 = reg.compare_models(train1, test1, reg.MODEL1_OPTIONS, "Daily_Revenue")
+    reg.plot_r2_comparison(table1, "Model 1: R2 of different X variables (2025 test data)", "Model1_R2_Comparison.png")
+
+    # the best model (1C) in detail
+    reg.run_model(train1, test1, reg.MODEL1_OPTIONS["1C Festival_Flag + Avg_Order_Value"],
+                  "Daily_Revenue", "Model 1C", "unseen 2025 data")
+
+    # ================= MODEL 2 (MULTIPLE): TARGET = AVG CUSTOMER RATING =================
+    print("\n===== MODEL 2 (MULTIPLE): PARTNER RATING =====")
+    partner_data = reg.create_partner_data(partners)
+    partner_data = reg.add_delay_rate(partner_data)      # Delay_Rate = delayed / (delayed + successful)
+    print(partner_data.head())
+
+    # same split as step 6: 80% of the partners for training and 20% for testing
+    train2, test2 = train_test_split(partner_data, test_size=0.2, random_state=42)
+    print("\nTrain:", train2.shape, " Test:", test2.shape)
+
+    print("\nModel 2 - R2 of all the models")
+    table2 = reg.compare_models(train2, test2, reg.MODEL2_OPTIONS, "Avg_Customer_Rating")
+    reg.plot_r2_comparison(table2, "Model 2: R2 of different X variables (20% test partners)", "Model2_R2_Comparison.png")
+
+    # the best model (2C) in detail
+    reg.run_model(train2, test2, reg.MODEL2_OPTIONS["2C Speed + Delay_Rate"],
+                  "Avg_Customer_Rating", "Model 2C", "unseen 20% partners")
+
+    # ================= MODEL 3 (SIMPLE): TARGET = AVG ORDER VALUE OF THE DAY =================
+    print("\n===== MODEL 3: AVG ORDER VALUE =====")
+    # same data and same split as Model 1 (daily data with Avg_Order_Value)
+    print("\nFeature selection (train data)")
+    x3 = reg.select_feature(train1, "Avg_Order_Value", reg.MODEL3_FEATURES)
+
+    print("\nAverage order value of normal and festive days")
+    reg.show_group_average(daily, "Festival_Flag", "Avg_Order_Value")
+
+    model3 = reg.run_model(train1, test1, x3, "Avg_Order_Value", "Model 3", "unseen 2025 data")
+
+    print("\nModel 3 - predicted order value for new values of", x3)
+    reg.predict_values(model3, x3, "Avg_Order_Value", [0, 1])
+
+    reg.plot_regression_line(test1, model3, x3, "Avg_Order_Value",
+                             "Model 3: " + x3 + " vs Avg Order Value (2025)", "Model3_Regression_Line.png")
+    reg.plot_residuals(test1, model3, x3, "Avg_Order_Value",
+                       "Model 3: Residual Plot", "Model3_Residuals.png")
+
+    # ================= MODEL 4 (SIMPLE): TARGET = DELAYED DELIVERIES OF A PARTNER =================
+    print("\n===== MODEL 4: DELAYED DELIVERIES =====")
+    # same partner data and same split as Model 2
+    print("\nFeature selection (train data)")
+    x4 = reg.select_feature(train2, "Delayed_Deliveries", reg.MODEL4_FEATURES)
+
+    model4 = reg.run_model(train2, test2, x4, "Delayed_Deliveries", "Model 4", "unseen 20% partners")
+
+    print("\nModel 4 - predicted delayed deliveries for new values of", x4)
+    reg.predict_values(model4, x4, "Delayed_Deliveries", [10, 25, 40])
+
+    reg.plot_regression_line(test2, model4, x4, "Delayed_Deliveries",
+                             "Model 4: " + x4 + " vs Delayed Deliveries (20% test partners)", "Model4_Regression_Line.png")
+    reg.plot_residuals(test2, model4, x4, "Delayed_Deliveries",
+                       "Model 4: Residual Plot", "Model4_Residuals.png")
 
 
 #  MAIN
 
+def show_title(text):
+    print("\n" + "#" * 70)
+    print("#", text)
+    print("#" * 70)
+
+
 def main():
-    steps = {1: ("Data cleaning + export to MySQL", run_cleaning),
-             2: ("SQL scripts (done in MySQL Workbench)", pause_for_sql),
-             3: ("MySQL to Python + final Excel file", run_mysql_to_python),
-             4: ("EDA (univariate and bivariate charts)", run_eda),
-             5: ("Statistics: sampling, CLT, normality, hypothesis tests", run_statistics),
-             6: ("Regression and 2026 forecast", run_regression)}
-
     print("Food Delivery Demand Analysis: what do you want to run?")
-    for number, (title, _) in steps.items():
-        print("  ", number, "=", title)
-    choice = input("Type the step numbers with a space (example: 4 5 6), or press Enter to run all: ").strip()
+    print("   1 = Data cleaning + export to MySQL")
+    print("   2 = SQL scripts (keys, procedures, triggers, agg_ tables)")
+    print("   3 = MySQL to Python + final Excel file")
+    print("   4 = EDA (univariate and bivariate charts)")
+    print("   5 = Statistics: sampling, CLT, normality, hypothesis tests")
+    print("   6 = Regression: 2 simple linear regression models")
+    print("   7 = Regression: multiple linear regression + 2 more models")
+    choice = input("Type the step numbers with a space (example: 4 5 6), or press Enter to run all: ")
 
-    if choice == "":
-        selected = list(steps.keys())
-    else:
-        selected = sorted({int(x) for x in choice.split() if x.isdigit() and int(x) in steps})
+    if choice.strip() == "":
+        choice = "1 2 3 4 5 6 7"
+    steps = choice.split()          # for example "4 5 6" becomes ["4", "5", "6"]
 
-    for number in selected:
-        print("\n" + "#" * 70)
-        print("#", number, "-", steps[number][0])
-        print("#" * 70)
-        steps[number][1]()
+    if "1" in steps:
+        show_title("1 - Data cleaning + export to MySQL")
+        run_cleaning()
+    if "2" in steps:
+        show_title("2 - SQL scripts (keys, procedures, triggers, agg_ tables)")
+        run_sql_scripts()
+    if "3" in steps:
+        show_title("3 - MySQL to Python + final Excel file")
+        run_mysql_to_python()
+    if "4" in steps:
+        show_title("4 - EDA (univariate and bivariate charts)")
+        run_eda()
+    if "5" in steps:
+        show_title("5 - Statistics: sampling, CLT, normality, hypothesis tests")
+        run_statistics()
+    if "6" in steps:
+        show_title("6 - Regression: 2 simple linear regression models")
+        run_regression()
+    if "7" in steps:
+        show_title("7 - Regression: multiple linear regression + 2 more models")
+        run_regression_multiple()
 
     print("\nAll selected steps finished.")
 

@@ -149,26 +149,29 @@ def capacity_hist(restaurants_f):
     return fig
 
 
-def forecast(monthly_fc, actual_by_year):
-    """Line chart: real revenue of past years (grey) and the 2026 forecast (orange)."""
-    fig, ax = new_chart("Monthly delivered revenue: actual vs 2026 forecast", 9, 4.2)
-    month_names = monthly_fc["Month_Name"]
-    for year in actual_by_year.columns:
-        ax.plot(month_names, actual_by_year[year] / 1_000_000, color=config.MUTED,
-                linewidth=1, marker="o", markersize=3, label="Actual " + str(year))
-    ax.plot(month_names, monthly_fc["Predicted_Revenue"] / 1_000_000, color=config.ORANGE,
-            linewidth=2.5, marker="o", label="Forecast 2026")
-    ax.set_ylabel("Revenue (₹ million)")
-    ax.legend(fontsize=8, ncol=4)
+def daily_orders(month_df, selected_date, avg_day):
+    """Line chart: orders of every day in the chosen month, with the average of that month."""
+    fig, ax = new_chart("Daily orders in " + selected_date.strftime("%B %Y"), 6)
+    ax.plot(month_df["KPI_Date"], month_df["Total_Orders"], color=config.TEAL, marker="o", markersize=3)
+    ax.axhline(avg_day, linestyle="--", color=config.MUTED, label=f"Average orders this month ({avg_day:.0f})")
+    chosen = month_df[month_df["KPI_Date"] == selected_date]
+    ax.scatter(chosen["KPI_Date"], chosen["Total_Orders"], s=90, color=config.ORANGE, zorder=3, label="Chosen day")
+    ax.set_ylabel("Orders")
+    ax.legend(fontsize=8)
+    fig.autofmt_xdate()
     fig.tight_layout()
     return fig
 
 
-def month_impact(impact_df):
-    """Bar chart: extra daily revenue of each month compared with January."""
-    fig, ax = new_chart("Extra daily revenue compared with January", 7, 3.6)
-    ax.bar(impact_df["Month"].str[:3], impact_df["Extra_Daily_Revenue"] / 1000,
-           color=config.TEAL, width=0.65)
-    ax.set_ylabel("₹ thousand per day")
+def daily_monthly_orders(trend_df, selected_date):
+    """Line chart: total orders of every month. The month of the chosen date is highlighted."""
+    fig, ax = new_chart("Monthly orders", 6)
+    ax.plot(trend_df["KPI_Date"], trend_df["Total_Orders"], color=config.TEAL, marker="o", markersize=4)
+    chosen = trend_df[trend_df["KPI_Date"] == selected_date.replace(day=1)]
+    ax.scatter(chosen["KPI_Date"], chosen["Total_Orders"], s=90, color=config.ORANGE, zorder=3,
+               label="Month of chosen date")
+    ax.set_ylabel("Orders")
+    ax.legend(fontsize=8)
+    fig.autofmt_xdate()
     fig.tight_layout()
     return fig

@@ -1,6 +1,6 @@
 """
 Data cleaning module: Data Acquisition and Initial Understanding (data cleaning)
-Project: Food Delivery Demand Analysis (Topic 7)
+Project: Food Delivery Demand Analysis
 
 This module only defines the functions (cleaning, checks, saving and export to MySQL).
 The functions are called from main.py.
@@ -82,10 +82,10 @@ def make_ids_uppercase(df, id_columns):
 
 
 # remove extra spaces and special characters from text columns
-def clean_one_value(text):
+def clean_one_value(value):
     # remove spaces at the start and end, then keep only the allowed characters
     new_text = ""
-    for character in text.strip():
+    for character in value.strip():
         if character in ALLOWED_CHARACTERS:
             new_text = new_text + character
     return new_text
@@ -269,6 +269,96 @@ def connect_to_mysql(password):
 
     return engine
 
+
+
+def drop_old_tables(engine):
+    # Remove everything left from an earlier run (tables, procedures, events), so the program
+    # can be run again and again on the same MySQL without errors.
+    # Foreign key checks are switched off while dropping, so the order of dropping does not matter.
+    # Keys, triggers and procedures are created again by the SQL scripts (step 2).
+    with engine.begin() as connection:
+        connection.execute(text("SET FOREIGN_KEY_CHECKS = 0"))
+
+        tables = connection.execute(text("SHOW TABLES")).fetchall()
+        for row in tables:
+            connection.execute(text("DROP TABLE IF EXISTS `" + row[0] + "`"))
+
+        procedures = connection.execute(
+            text("SELECT ROUTINE_NAME FROM information_schema.ROUTINES "
+                 "WHERE ROUTINE_SCHEMA = :db AND ROUTINE_TYPE = 'PROCEDURE'"),
+            {"db": MYSQL_DATABASE}).fetchall()
+        for row in procedures:
+            connection.execute(text("DROP PROCEDURE IF EXISTS `" + row[0] + "`"))
+
+        events = connection.execute(
+            text("SELECT EVENT_NAME FROM information_schema.EVENTS WHERE EVENT_SCHEMA = :db"),
+            {"db": MYSQL_DATABASE}).fetchall()
+        for row in events:
+            connection.execute(text("DROP EVENT IF EXISTS `" + row[0] + "`"))
+
+        connection.execute(text("SET FOREIGN_KEY_CHECKS = 1"))
+    print("Old tables, procedures and events removed")
+
+
+def split_sql(script):
+    # Cut a SQL script into single statements.
+    # It understands the DELIMITER lines (used for procedures and triggers), because
+    # a procedure has ; inside its body and must be sent to MySQL as one statement.
+    statements = []
+    delimiter = ";"
+    current = ""
+
+    for line in script.splitlines():
+        stripped = line.strip()
+
+        if stripped.upper().startswith("DELIMITER"):
+            delimiter = stripped[9:].strip()
+            if delimiter == "":
+                delimiter = ";"
+            continue
+
+        if stripped.startswith("--") and current.strip() == "":
+            continue                        # comment line between two statements
+
+        current = current + line + "\n"
+
+        if stripped.endswith(delimiter):
+            statement = current.strip()
+            statement = statement[:-len(delimiter)].strip()
+            if statement != "":
+                statements.append(statement)
+            current = ""
+
+    if current.strip() != "":
+        statements.append(current.strip())
+    return statements
+
+
+def run_sql_file(engine, file_path):
+    # Run one .sql file from Python (same as running it in MySQL Workbench).
+    # One connection is used for the whole file, so START TRANSACTION ... ROLLBACK works.
+    with open(file_path, encoding="utf-8") as file:
+        statements = split_sql(file.read())
+
+    connection = engine.raw_connection()
+    cursor = connection.cursor()
+    failed = 0
+
+    for statement in statements:
+        try:
+            cursor.execute(statement)
+            cursor.fetchall()               # read the result of SELECT / CALL and ignore it
+            while cursor.nextset():         # a procedure can return more than one result
+                pass
+        except Exception as error:
+            failed = failed + 1
+            print("   Skipped:", statement.splitlines()[0][:70])
+            print("   Reason :", error)
+
+    connection.commit()
+    cursor.close()
+    connection.close()
+    print(file_path, "finished:", len(statements) - failed, "of", len(statements), "statements ran")
 
 
 def send_table_to_mysql(df, table_name, engine):

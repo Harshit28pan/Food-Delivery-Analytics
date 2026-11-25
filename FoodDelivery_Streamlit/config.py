@@ -12,6 +12,7 @@ FILES = {
     "customers": "customers_clean.csv",
     "restaurants": "restaurants_clean.csv",
     "partners": "delivery_partners_clean.csv",
+    "daily_kpi": "daily_kpi_summary.csv",      # exported from MySQL (table daily_kpi_summary)
 }
 
 MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",

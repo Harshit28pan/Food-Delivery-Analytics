@@ -5,6 +5,7 @@ import os
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
+from matplotlib.colors import LinearSegmentedColormap
 
 EXCEL_FILE = os.path.join("final_dataset", "food_delivery_final.xlsx")
 
@@ -156,7 +157,7 @@ def bivariate_part1(data, partners):
              "Speed (KMPH)", BI_FOLDER, "bi_4_vehicle_speed.png", decimals=2)
     
 def bivariate_part2(data):
-    # 4 more bivariate charts: festive vs normal, month, year and correlation
+    # 3 more bivariate charts: festive vs normal, month and year
 
     # 5. Festival flag vs average order value
     festive = data.groupby("Festival_Flag")["Order_Value"].mean().round(2).reset_index()
@@ -177,13 +178,41 @@ def bivariate_part2(data):
     plot_bar(year_orders, "Order_Year", "Total_Orders", "Total Orders by Year",
              "Total Orders", BI_FOLDER, "bi_7_year_orders.png")
 
-    # 8. Correlation between the numeric columns (+1 = move together, 0 = no relation)
-    numeric_cols = ["Order_Value", "Delivery_Fee", "Discount_Applied", "Delivery_Time_Minutes",
-                    "Order_Rating", "Avg_Delivery_Speed_KMPH", "Delivery_Efficiency_Score",
-                    "Avg_Preparation_Time_Minutes", "Order_Capacity_Per_Day"]
-    corr = data[numeric_cols].corr().round(2)
-    plt.figure(figsize=(9,7))
-    sns.heatmap(corr, annot=True, fmt=".2f", cmap="coolwarm", center=0, annot_kws={"size": 10})
-    plt.title("Correlation between Numeric Columns", color=NAVY, fontsize=13)
-    plt.xticks(rotation=45, ha="right", fontsize=11)
-    save_chart(BI_FOLDER, "bi_8_correlation_heatmap.png")
+
+def bivariate_scatter(partners):
+    # 8. Scatter plot: 2 numeric columns together (one dot = one delivery partner)
+    # Does a faster partner get a better customer rating? The line shows the direction.
+    corr = partners["Avg_Delivery_Speed_KMPH"].corr(partners["Avg_Customer_Rating"]).round(2)
+    print("Correlation of speed and rating:", corr)
+
+    plt.figure(figsize=(8, 5))
+    sns.regplot(data=partners, x="Avg_Delivery_Speed_KMPH", y="Avg_Customer_Rating",
+                scatter_kws={"color": TEAL, "alpha": 0.4}, line_kws={"color": ORANGE})
+    plt.title("Delivery Speed vs Customer Rating of Partners (r = " + str(corr) + ")", color=NAVY, fontsize=13)
+    plt.xlabel("Average Delivery Speed (KMPH)", fontsize=11)
+    plt.ylabel("Average Customer Rating", fontsize=11)
+    save_chart(BI_FOLDER, "bi_8_speed_rating_scatter.png")
+
+
+def multivariate_correlation(data):
+    # Multivariate: correlation of many numeric columns together (+1 = move together, 0 = no relation)
+    # The other multivariate charts are made in Power BI, only this heatmap is made here.
+    # 8 columns only, so the numbers stay big and clear when the image is placed in Power BI.
+    short_names = {"Order_Value": "Order Value", "Delivery_Time_Minutes": "Delivery Time",
+                   "Order_Rating": "Order Rating", "Average_Spend": "Average Spend",
+                   "Avg_Preparation_Time_Minutes": "Prep Time", "Avg_Delivery_Speed_KMPH": "Delivery Speed",
+                   "Delayed_Deliveries": "Delayed Deliveries", "Delivery_Efficiency_Score": "Efficiency Score"}
+    corr = data[list(short_names)].corr().round(2) + 0.0      # + 0.0 removes the ugly -0.00 values
+    corr = corr.rename(index=short_names, columns=short_names)
+    print(corr)
+
+    # project colours: orange = negative, white = zero, navy = positive
+    theme_map = LinearSegmentedColormap.from_list("theme", [ORANGE, "white", NAVY])
+
+    plt.figure(figsize=(10, 7))
+    sns.heatmap(corr, annot=True, fmt=".2f", cmap=theme_map, vmin=-1, vmax=1,
+                linewidths=1, linecolor="white", annot_kws={"size": 14, "fontweight": "bold"})
+    plt.title("Correlation Heatmap of Numeric Columns", color=NAVY, fontsize=18, fontweight="bold")
+    plt.xticks(rotation=40, ha="right", fontsize=13, color="black", fontweight="bold")
+    plt.yticks(rotation=0, fontsize=13, color="black", fontweight="bold")
+    save_chart(MULTI_FOLDER, "mv_7_correlation_heatmap.png")

@@ -5,6 +5,7 @@
 MySQL to Python module: bring the MySQL tables back into Python.
 Functions only, they are called from main.py.
 """
+import os
 import pandas as pd
 
 # python name -> MySQL table name
@@ -85,8 +86,6 @@ def fix_data_types(tables):
     return tables
 
 def save_to_excel(tables, file_name):
-
-    import os
 
     if not os.path.exists("final_dataset"):
         os.mkdir("final_dataset")
